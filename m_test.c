@@ -6,25 +6,42 @@
 #include <linux/gpio.h>
 
 
-#define DRIVER_AUTHOR "Igor <hardware.coder@gmail.com>"
-#define DRIVER_DESC   "Tnterrupt Test"
+#define DRIVER_AUTHOR "Jesus Trujillo <jesusftrujillor@gmail.com>"
+#define DRIVER_DESC   "ADF702x"
 
-// we want GPIO_17 (pin 11 on P5 pinout raspberry pi rev. 2 board)
+// we want GPIO_4 (pin 7 on P1 pinout raspberry pi rev. 2 board)
 // to generate interrupt
-#define GPIO_ANY_GPIO                17
+#define GPIO_TXRXCLK_GPIO                4   // pin 7 on P1
+#define GPIO_TXRXDATA_GPIO               17  // pin 11 on P1
+#define GPIO_TXRX_SW_GPIO                25  // pin 22 on P1
+#define GPIO_SLE_GPIO                    18  // pin 12 on P1
+#define GPIO_SDATA_GPIO                  21  // pin 13 on P1 (rpi1 only)
+#define GPIO_SREAD_GPIO                  22  // pin 15 on P1
+#define GPIO_SCLK_GPIO                   23  // pin 16 on P1
+#define GPIO_CE_GPIO                     24  // pin 18 on P1
 
 // text below will be seen in 'cat /proc/interrupt' command
-#define GPIO_ANY_GPIO_DESC           "Some gpio pin description"
+#define GPIO_TXRXCLK_GPIO_DESC           "ADF702x transceiver CLK"
 
 // below is optional, used in more complex code, in our case, this could be
 // NULL
-#define GPIO_ANY_GPIO_DEVICE_DESC    "some_device"
+#define GPIO_TXRXCLK_GPIO_DEVICE_DESC    "adf702x"
 
+static struct gpio adf702x_gpios[] = {
+  { GPIO_TXRXCLK_GPIO,     GPIOF_IN,          "adf702x transceiver clock"  },
+  { GPIO_TXRXDATA_GPIO,    GPIOF_IN,          "adf702x transceiver data"   },
+  { GPIO_TXRX_SW_GPIO,     GPIOF_INIT_LOW,    "adf702x TX/RX switch"       },
+  { GPIO_SLE_GPIO,         GPIOF_INIT_LOW,    "adf702x serial load enable" },
+  { GPIO_SDATA_GPIO,       GPIOF_INIT_LOW,    "adf702x serial data out"    },
+  { GPIO_SREAD_GPIO,       GPIOF_IN,          "adf702x serial data in"     },
+  { GPIO_SCLK_GPIO,        GPIOF_INIT_LOW,    "adf702x serial clock"       },
+  { GPIO_CE_GPIO,          GPIOF_INIT_LOW,    "adf702x chip enable"        }
+};
 
 /****************************************************************************/
 /* Interrupts variables block                                               */
 /****************************************************************************/
-short int irq_any_gpio    = 0;
+short int irq_txrxclk_gpio    = 0;
 
 
 /****************************************************************************/
@@ -60,23 +77,26 @@ static irqreturn_t r_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 /****************************************************************************/
 void r_int_config(void) {
 
-  if (gpio_request(GPIO_ANY_GPIO, GPIO_ANY_GPIO_DESC)) {
-    printk("GPIO request faiure: %s\n", GPIO_ANY_GPIO_DESC);
+  // request GPIOs
+  int ret = 0;
+  if ( (ret = gpio_request_array(adf702x_gpios, ARRAY_SIZE(adf702x_gpios))) < 0 ) {
+    printk("GPIO failure requesting pin, errno=%d\n", ret);
     return;
   }
 
-  if ( (irq_any_gpio = gpio_to_irq(GPIO_ANY_GPIO)) < 0 ) {
-    printk("GPIO to IRQ mapping faiure %s\n", GPIO_ANY_GPIO_DESC);
+  // set interrupt handler for TxRxCLK
+  if ( (irq_txrxclk_gpio = gpio_to_irq(GPIO_TXRXCLK_GPIO)) < 0 ) {
+    printk("GPIO to IRQ mapping faiure %s\n", GPIO_TXRXCLK_GPIO_DESC);
     return;
   }
 
-  printk(KERN_NOTICE "Mapped int %d\n", irq_any_gpio);
+  printk(KERN_NOTICE "Mapped int %d\n", irq_txrxclk_gpio);
 
-  if (request_irq(irq_any_gpio,
+  if (request_irq(irq_txrxclk_gpio,
 		  (irq_handler_t ) r_irq_handler,
-		  IRQF_TRIGGER_FALLING,
-		  GPIO_ANY_GPIO_DESC,
-		  GPIO_ANY_GPIO_DEVICE_DESC)) {
+		  IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
+		  GPIO_TXRXCLK_GPIO_DESC,
+		  GPIO_TXRXCLK_GPIO_DEVICE_DESC)) {
     printk("Irq Request failure\n");
     return;
   }
@@ -89,10 +109,9 @@ void r_int_config(void) {
 /* This function releases interrupts.                                       */
 /****************************************************************************/
 void r_int_release(void) {
-
-  free_irq(irq_any_gpio, GPIO_ANY_GPIO_DEVICE_DESC);
-  gpio_free(GPIO_ANY_GPIO);
-
+  free_irq(irq_txrxclk_gpio, GPIO_TXRXCLK_GPIO_DEVICE_DESC);
+  gpio_free_array(adf702x_gpios, ARRAY_SIZE(adf702x_gpios));
+  
   return;
 }
 
@@ -102,7 +121,7 @@ void r_int_release(void) {
 /****************************************************************************/
 int r_init(void) {
 
-  printk(KERN_NOTICE "Hello !\n");
+  printk(KERN_NOTICE "Hello adf702x!\n");
   r_int_config();
 
   return 0;
