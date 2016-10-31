@@ -9,21 +9,20 @@
 #include "bit_circ_buf.h"
 
 void push_bit_to_cbuf(struct bit_circ_buf *cb, char value) {
-  int pos = (cb->head % cb->size);
-  if ( value ) {
-    cb->buf[cb->head / 8] |= 1 << (cb->head % 8);
+  if ( value & 1 ) {
+    cb->buf[cb->head / 8] |= 1 << (7 - (cb->head % 8));
   } else {
-    cb->buf[cb->head / 8] &= ~(1 << (cb->head % 8));
+    cb->buf[cb->head / 8] &= ~(1 << (7 - (cb->head % 8)));
   }
   cb->head = (cb->head + 1) % cb->size;
 }
 
-int cbuf_size(struct bit_circ_buf *cb) {
-  int nbytes = 0;
+ssize_t cbuf_size(struct bit_circ_buf *cb) {
+  ssize_t nbytes = 0;
   if (cb->head > cb->tail) {
     nbytes = (cb->head / 8) - (cb->tail / 8);
   } else if (cb->head < cb->tail) {
-    nbytes = (cb->size * 8) - (cb->tail / 8) - (cb->head / 8);
+    nbytes = ((cb->size - cb->tail) + cb->head) / 8;
   }
   return nbytes;
 }
@@ -63,6 +62,17 @@ static struct gpio adf702x_gpios[] = {
 };
 
 /****************************************************************************/
+/* IOCTL definitions                                                        */
+/****************************************************************************/
+
+#define ADF702X_IOC_MAGIC 190
+
+#define ADF702X_IOC_COMMAND     _IOW(ADF702X_IOC_MAGIC,   1, unsigned int)
+#define ADF702X_IOC_READBACK    _IOWR(ADF702X_IOC_MAGIC,  2, char)
+
+#define ADF702X_IOC_MAXNR 2
+
+/****************************************************************************/
 /* Interrupts variables block                                               */
 /****************************************************************************/
 short int irq_txrxclk_gpio    = 0;
@@ -78,6 +88,7 @@ static int     adf702x_open(struct inode *, struct file *);
 static int     adf702x_release(struct inode *, struct file *);
 static ssize_t adf702x_read(struct file *, char *, size_t, loff_t *);
 static ssize_t adf702x_write(struct file *, const char *, size_t, loff_t *);
+static long    adf702x_ioctl(struct file *, unsigned int, unsigned long);
 
 struct adf702x_state {
   struct bit_circ_buf *rcv_buf;
@@ -101,6 +112,7 @@ static struct file_operations fops =
     .read = adf702x_read,
     .write = adf702x_write,
     .release = adf702x_release,
+    .unlocked_ioctl = adf702x_ioctl,
   };
 
 /****************************************************************************/
@@ -109,12 +121,13 @@ static struct file_operations fops =
 static irqreturn_t r_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 
   unsigned long flags;
-
+  
   // push data bit 
-  push_bit_to_cbuf(state.rcv_buf, gpio_get_value(GPIO_TXRXDATA_GPIO));
+  int gpio_state = gpio_get_value(GPIO_TXRXDATA_GPIO);
+  push_bit_to_cbuf(state.rcv_buf, gpio_state);
   
   // disable hard interrupts (remember them in flag 'flags')
-  local_irq_save(flags);
+  //local_irq_save(flags);
 
   // NOTE:
   // Anonymous Sep 17, 2013, 3:16:00 PM:
@@ -124,11 +137,11 @@ static irqreturn_t r_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
   // hardware.coder:
   // http://stackoverflow.com/questions/8738951/printk-inside-an-interrupt-handler-is-it-really-that-bad
 
-  printk(KERN_NOTICE "Interrupt [%d] for device %s was triggered !.\n",
-	 irq, (char *) dev_id);
+  //printk(KERN_NOTICE "Interrupt [%d] for device %s was triggered !, gpio_value= %d.\n",
+  //	 irq, (char *) dev_id, gpio_state);
 
   // restore hard interrupts
-  local_irq_restore(flags);
+  //local_irq_restore(flags);
 
   return IRQ_HANDLED;
 }
@@ -153,7 +166,6 @@ void r_int_config(void) {
   }
 
   printk(KERN_NOTICE "Mapped int %d\n", irq_txrxclk_gpio);
-
   if (request_irq(irq_txrxclk_gpio,
 		  (irq_handler_t ) r_irq_handler,
 		  IRQF_TRIGGER_RISING, // | IRQF_TRIGGER_FALLING,
@@ -193,6 +205,7 @@ static int __init r_init(void) {
     goto err;
   }
 
+  printk(KERN_NOTICE "adf702x: got major_number=%d", major_number);
   return 0;
   
  err:
@@ -209,27 +222,35 @@ void r_cleanup(void) {
 static int adf702x_open(struct inode *inodep, struct file *filep) {
   // TODO implement file open.
   // use filep->private_data to hold status my view of the circular buffer
-  printk(KERN_NOTICE "adf702x: opened");
+  printk(KERN_NOTICE "adf702x: opened\n");
   return 0;
 }
 
 static ssize_t adf702x_read(struct file *filep, char *buffer, size_t len, loff_t *offset) {
   // TODO implement file read
-  ssize_t nbytes = 0;
+  struct bit_circ_buf *cb = state.rcv_buf;
+  ssize_t nbytes = min(cbuf_size(cb), (ssize_t)len);
+  ssize_t tail_bytes = (cb->size - cb->tail) / 8;
+  long ret = 0;
 
-  if (cbuf_size(state.rcv_buf) < len) {
-    nbytes = cbuf_size(state.rcv_buf);
-  } else {
-    nbytes = len;
+  if ( cb->head > cb->tail ) {
+    ret = copy_to_user(buffer, &cb->buf[cb->tail / 8], nbytes);
+  } else if ( cb->head < cb->tail ) {
+    ret = copy_to_user(buffer, &cb->buf[cb->tail / 8], tail_bytes);
+    ret += copy_to_user(buffer + tail_bytes, &cb->buf[0], cb->head / 8);
   }
-
-  if ( copy_to_user(buffer, &state.rcv_buf->buf[state.rcv_buf->tail / 8], nbytes) != 0 ) {
+  printk(KERN_INFO "cbuf_size is %d, requested length is %d\n", cbuf_size(cb), len);
+  printk(KERN_INFO "circ_buf before status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
+  
+  if ( ret != 0 ) {
     printk(KERN_INFO "adf702x: failed to send %d characters to the user\n", nbytes);
     return -EFAULT;
   }
 
-  state.rcv_buf->tail = (state.rcv_buf->tail + (nbytes * 8)) % state.rcv_buf->size;
-  printk(KERN_INFO "adf702x: read %d bytes", nbytes);
+  cb->tail = (cb->tail + ((nbytes - ret) * 8)) % cb->size;
+  printk(KERN_INFO "adf702x: read %d bytes\n", nbytes);
+  printk(KERN_INFO "circ_buf after  status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
+
   
   return nbytes;
 }
@@ -247,6 +268,10 @@ static ssize_t adf702x_write(struct file *filep, const char *buffer, size_t len,
 
   printk(KERN_INFO "adf702x: wrote %d bytes", len);
   return len;
+}
+
+static long adf702x_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
+  return -EFAULT;
 }
 
 static int adf702x_release(struct inode *inodep, struct file *filep) {
