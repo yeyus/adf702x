@@ -5,6 +5,8 @@
 #include <linux/interrupt.h>
 #include <linux/gpio.h>
 #include <asm/uaccess.h>
+#include <linux/wait.h>
+#include <linux/sched.h>
 
 #include "bit_circ_buf.h"
 
@@ -80,7 +82,7 @@ short int irq_txrxclk_gpio    = 0;
 /****************************************************************************/
 /* Char device variables block                                              */
 /****************************************************************************/
-#define BUFFER_SIZE 64
+#define BUFFER_SIZE 1024
 
 static DECLARE_WAIT_QUEUE_HEAD(readers_wait_q);
 
@@ -127,6 +129,8 @@ static irqreturn_t r_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
   // push data bit 
   int gpio_state = gpio_get_value(GPIO_TXRXDATA_GPIO);
   push_bit_to_cbuf(state.rcv_buf, gpio_state);
+
+  wake_up_interruptible(&readers_wait_q);
   
   // disable hard interrupts (remember them in flag 'flags')
   //local_irq_save(flags);
@@ -176,6 +180,8 @@ void r_int_config(void) {
     printk("Irq Request failure\n");
     return;
   }
+
+  init_waitqueue_head(&readers_wait_q);
 
   return;
 }
@@ -231,18 +237,30 @@ static int adf702x_open(struct inode *inodep, struct file *filep) {
 static ssize_t adf702x_read(struct file *filep, char *buffer, size_t len, loff_t *offset) {
   // TODO implement file read
   struct bit_circ_buf *cb = state.rcv_buf;
-  ssize_t nbytes = min(cbuf_size(cb), (ssize_t)len);
-  ssize_t tail_bytes = (cb->size - cb->tail) / 8;
+  ssize_t nbytes;
+  ssize_t tail_bytes;
   long ret = 0;
 
+  if (cbuf_size(cb) < 1) {
+    if (filep->f_flags & O_NONBLOCK) {
+      return -EAGAIN;
+    }
+    if (wait_event_interruptible(readers_wait_q, cbuf_size(cb) != 0)) {
+      return -ERESTARTSYS;
+    }
+  }
+
+  nbytes = min(cbuf_size(cb), (ssize_t)len);
+  tail_bytes = (cb->size - cb->tail) / 8;
+  
   if ( cb->head > cb->tail ) {
     ret = copy_to_user(buffer, &cb->buf[cb->tail / 8], nbytes);
   } else if ( cb->head < cb->tail ) {
     ret = copy_to_user(buffer, &cb->buf[cb->tail / 8], tail_bytes);
     ret += copy_to_user(buffer + tail_bytes, &cb->buf[0], cb->head / 8);
   }
-  printk(KERN_INFO "cbuf_size is %d, requested length is %d\n", cbuf_size(cb), len);
-  printk(KERN_INFO "circ_buf before status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
+  //printk(KERN_INFO "cbuf_size is %d, requested length is %d\n", cbuf_size(cb), len);
+  //printk(KERN_INFO "circ_buf before status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
   
   if ( ret != 0 ) {
     printk(KERN_INFO "adf702x: failed to send %d characters to the user\n", nbytes);
@@ -250,8 +268,8 @@ static ssize_t adf702x_read(struct file *filep, char *buffer, size_t len, loff_t
   }
 
   cb->tail = (cb->tail + ((nbytes - ret) * 8)) % cb->size;
-  printk(KERN_INFO "adf702x: read %d bytes\n", nbytes);
-  printk(KERN_INFO "circ_buf after  status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
+  //printk(KERN_INFO "adf702x: read %d bytes\n", nbytes);
+  //printk(KERN_INFO "circ_buf after  status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
 
  out:  
   return nbytes;
