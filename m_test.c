@@ -82,6 +82,8 @@ short int irq_txrxclk_gpio    = 0;
 /****************************************************************************/
 #define BUFFER_SIZE 64
 
+static DECLARE_WAIT_QUEUE_HEAD(readers_wait_q);
+
 static int major_number;
 
 static int     adf702x_open(struct inode *, struct file *);
@@ -120,7 +122,7 @@ static struct file_operations fops =
 /****************************************************************************/
 static irqreturn_t r_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 
-  unsigned long flags;
+  //unsigned long flags;
   
   // push data bit 
   int gpio_state = gpio_get_value(GPIO_TXRXDATA_GPIO);
@@ -251,7 +253,7 @@ static ssize_t adf702x_read(struct file *filep, char *buffer, size_t len, loff_t
   printk(KERN_INFO "adf702x: read %d bytes\n", nbytes);
   printk(KERN_INFO "circ_buf after  status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
 
-  
+ out:  
   return nbytes;
 }
 
