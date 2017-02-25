@@ -7,6 +7,7 @@
 #include <asm/uaccess.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
+#include <linux/delay.h>
 
 #include "bit_circ_buf.h"
 
@@ -69,10 +70,16 @@ static struct gpio adf702x_gpios[] = {
 
 #define ADF702X_IOC_MAGIC 190
 
-#define ADF702X_IOC_COMMAND     _IOW(ADF702X_IOC_MAGIC,   1, unsigned int)
-#define ADF702X_IOC_READBACK    _IOWR(ADF702X_IOC_MAGIC,  2, char)
+#define ADF702X_IOC_COMMAND     _IOW(ADF702X_IOC_MAGIC,   1, unsigned long)
+#define ADF702X_IOC_READBACK    _IOWR(ADF702X_IOC_MAGIC,  2, unsigned long)
+#define ADF702X_IOC_ENABLE      _IOW(ADF702X_IOC_MAGIC,   3, unsigned long)
+#define ADF702X_IOC_DISABLE     _IOW(ADF702X_IOC_MAGIC,   4, unsigned long)
+#define ADF702X_IOC_TEST        _IOWR(ADF702X_IOC_MAGIC,  5, unsigned long)
 
-#define ADF702X_IOC_MAXNR 2
+#define ADF702X_IOC_MAXNR 5
+
+#define T1_DELAY_US 10
+#define T6_DELAY_US 20
 
 /****************************************************************************/
 /* Interrupts variables block                                               */
@@ -271,7 +278,6 @@ static ssize_t adf702x_read(struct file *filep, char *buffer, size_t len, loff_t
   //printk(KERN_INFO "adf702x: read %d bytes\n", nbytes);
   //printk(KERN_INFO "circ_buf after  status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
 
- out:  
   return nbytes;
 }
 
@@ -291,7 +297,108 @@ static ssize_t adf702x_write(struct file *filep, const char *buffer, size_t len,
 }
 
 static long adf702x_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
-  return -EFAULT;
+  int ret_val = -EFAULT;
+  int i, bit;
+  
+  switch (cmd)
+  {
+    case ADF702X_IOC_COMMAND:
+      printk(KERN_INFO "adf702x: ioctl: command value: %08lx", arg & 0xFFFFFFFF);
+      // SLE down
+      gpio_set_value(GPIO_SLE_GPIO, 0);
+      for (i = 31; i>=0; i--) {
+	// SCLK down
+	gpio_set_value(GPIO_SCLK_GPIO, 0);
+	// SDATA set bit
+	gpio_set_value(GPIO_SDATA_GPIO, ((arg & 0xFFFFFFFF) >> i) & 1);
+	// delay t1= >10ns
+	udelay(T1_DELAY_US);
+	// SCLK up
+	gpio_set_value(GPIO_SCLK_GPIO, 1);
+	// delay t1= >10ns
+	udelay(T1_DELAY_US);	
+      }
+      // SCLK down
+      gpio_set_value(GPIO_SCLK_GPIO, 0);
+      // delay t1= >10ns
+      udelay(T1_DELAY_US);	
+      // SLE up
+      gpio_set_value(GPIO_SLE_GPIO, 1);
+      // delay t6= >20ns
+      udelay(T6_DELAY_US);
+      // SLE down
+      gpio_set_value(GPIO_SLE_GPIO, 0);
+      return 0;
+
+    case ADF702X_IOC_READBACK:
+      printk(KERN_INFO "adf702x: ioctl: readback value: %08lx", arg & 0x01FF);
+      ret_val = 0;
+      // SLE down
+      gpio_set_value(GPIO_SLE_GPIO, 0);
+      for (i = 7; i>=0; i--) {
+	// SCLK down
+	gpio_set_value(GPIO_SCLK_GPIO, 0);
+	// SDATA set bit
+	gpio_set_value(GPIO_SDATA_GPIO, ((arg & 0xFF) >> i) & 1);
+	// delay t1= >10ns
+	udelay(T1_DELAY_US);
+	// SCLK up
+	gpio_set_value(GPIO_SCLK_GPIO, 1);
+	// delay t1= >10ns
+	udelay(T1_DELAY_US);	
+      }
+      // SCLK down
+      gpio_set_value(GPIO_SCLK_GPIO, 0);
+      // delay t1= >10ns
+      udelay(T1_DELAY_US);	
+      // SLE up
+      gpio_set_value(GPIO_SLE_GPIO, 1);
+      // delay t1 = >10ns
+      udelay(T1_DELAY_US);
+      for (i = 15; i>=0; i--) {
+	// SCLK down
+	gpio_set_value(GPIO_SCLK_GPIO, 0);
+	// SREAD get bit
+	bit = gpio_get_value(GPIO_SREAD_GPIO);
+	if (bit) {
+	  ret_val |= (1 << i);
+	}
+	// delay t1= >10ns
+	udelay(T1_DELAY_US);
+	// SCLK up
+	gpio_set_value(GPIO_SCLK_GPIO, 1);
+	// delay t1= >10ns
+	udelay(T1_DELAY_US);	
+      }
+      // SCLK down
+      gpio_set_value(GPIO_SCLK_GPIO, 0);
+      // delay t1= >10ns
+      udelay(T1_DELAY_US);	
+      // SLE down
+      gpio_set_value(GPIO_SLE_GPIO, 0);
+      printk(KERN_INFO "adf702x: ioctl: readback returns: %04x", ret_val & 0xFFFF);
+      return ret_val & 0xFFFF;
+      
+    case ADF702X_IOC_ENABLE:
+      printk(KERN_INFO "adf702x: ioctl: enable");
+      gpio_set_value(GPIO_CE_GPIO, 1);
+      return 0;
+ 
+    case ADF702X_IOC_DISABLE:
+      printk(KERN_INFO "adf702x: ioctl: disable");
+      gpio_set_value(GPIO_CE_GPIO, 0);
+      return 0;
+
+    case ADF702X_IOC_TEST:
+      printk(KERN_INFO "adf702x: ioctl: test value: %ld", arg);
+      return arg + 1;
+
+    default:
+      printk(KERN_ERR "adf702x: unknown ioctl with %u", cmd);
+      return -EINVAL;
+  }
+  
+  return -EINVAL;
 }
 
 static int adf702x_release(struct inode *inodep, struct file *filep) {
