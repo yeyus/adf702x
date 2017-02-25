@@ -1,10 +1,10 @@
 # my optional module name
-MODULE=m_test
+MODULE=adf702x
 
 # this two variables, depends where you have you raspberry kernel source and tools installed
 
-CCPREFIX=/home/yeyus/tools/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian-x64/bin/arm-linux-gnueabihf-
-KERNEL_SRC=/home/yeyus/linux
+CCPREFIX=$(HOME)/tools/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian-x64/bin/arm-linux-gnueabihf-
+KERNEL_SRC=$(HOME)/linux
 
 
 obj-m += ${MODULE}.o
