@@ -8,7 +8,7 @@ Pin configuration
 
 (for Raspberry Pi 1 rev. B)
 
-`
+```
 [AV Connector]
 
 +--------+--------+
@@ -62,12 +62,12 @@ Pin configuration
 +--------+--------+
 |        |        |
 |   5V   |   3V3  |
-|    2   |    1   |
-+--------+--------+
+|    2   |    1   |           [Micro USB]
++--------+--------+           [ Connector]
 
 GPIO 21 is only available on pin 13 in RPI1
 
-`
+```
 
 References
 ==========
