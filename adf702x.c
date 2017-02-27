@@ -335,7 +335,7 @@ static long adf702x_ioctl(struct file *filep, unsigned int cmd, unsigned long ar
       ret_val = 0;
       // SLE down
       gpio_set_value(GPIO_SLE_GPIO, 0);
-      for (i = 7; i>=0; i--) {
+      for (i = 8; i>=0; i--) {
 	// SCLK down
 	gpio_set_value(GPIO_SCLK_GPIO, 0);
 	// SDATA set bit
