@@ -22,7 +22,7 @@ clean:
 
 # this just copies a file to raspberry
 install:
-	scp ${module_upload} pi@192.168.1.128:/home/pi/modules
+	scp ${module_upload} pi@192.168.1.32:/home/pi/modules
 
 info:
 	modinfo  ${module_upload}
