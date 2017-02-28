@@ -163,34 +163,34 @@ static irqreturn_t r_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 /****************************************************************************/
 /* This function configures interrupts.                                     */
 /****************************************************************************/
-void r_int_config(void) {
+int r_int_config(void) {
 
   // request GPIOs
   int ret = 0;
   if ( (ret = gpio_request_array(adf702x_gpios, ARRAY_SIZE(adf702x_gpios))) < 0 ) {
     printk("GPIO failure requesting pin, errno=%d\n", ret);
-    return;
+    return ret;
   }
 
   // set interrupt handler for TxRxCLK
   if ( (irq_txrxclk_gpio = gpio_to_irq(GPIO_TXRXCLK_GPIO)) < 0 ) {
     printk("GPIO to IRQ mapping faiure %s\n", GPIO_TXRXCLK_GPIO_DESC);
-    return;
+    return irq_txrxclk_gpio;
   }
 
   printk(KERN_NOTICE "Mapped int %d\n", irq_txrxclk_gpio);
-  if (request_irq(irq_txrxclk_gpio,
+  if ( (ret = request_irq(irq_txrxclk_gpio,
 		  (irq_handler_t ) r_irq_handler,
 		  IRQF_TRIGGER_RISING, // | IRQF_TRIGGER_FALLING,
 		  GPIO_TXRXCLK_GPIO_DESC,
-		  GPIO_TXRXCLK_GPIO_DEVICE_DESC)) {
+			  GPIO_TXRXCLK_GPIO_DEVICE_DESC)) < 0 ) {
     printk("Irq Request failure\n");
-    return;
+    return ret;
   }
 
   init_waitqueue_head(&readers_wait_q);
 
-  return;
+  return ret;
 }
 
 
@@ -212,7 +212,10 @@ static int __init r_init(void) {
   int err = 0;
   
   printk(KERN_NOTICE "Hello adf702x!\n");
-  r_int_config();
+  if ( (err = r_int_config()) < 0) {
+    printk(KERN_ERR "adf702x: unable to get usage of gpio pin");
+    goto err;
+  }
 
   if ( (major_number = register_chrdev(0, DEVICE_NAME, &fops)) < 0 ) {
     printk(KERN_ERR "adf702x: unable to get major number");
@@ -228,7 +231,7 @@ static int __init r_init(void) {
 }
 
 void r_cleanup(void) {
-  printk(KERN_NOTICE "Goodbye\n");
+  printk(KERN_NOTICE "adf702x: goodbye\n");
 
   unregister_chrdev(major_number, DEVICE_NAME);
   r_int_release();
