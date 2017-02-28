@@ -36,6 +36,7 @@ ssize_t cbuf_size(struct bit_circ_buf *cb) {
 #define DRIVER_DESC   "ADF702x"
 
 #define DEVICE_NAME   "adf702x"
+#define TAG DEVICE_NAME ": "
 
 // Module params section
 static int gpio_txrxclk_pin = -EINVAL;
@@ -77,9 +78,6 @@ MODULE_PARM_DESC(gpio_ce_pin, "adf702x chip eneable pin");
 
 // text below will be seen in 'cat /proc/interrupt' command
 #define GPIO_TXRXCLK_GPIO_DESC           "ADF702x transceiver CLK"
-
-// below is optional, used in more complex code, in our case, this could be
-// NULL
 #define GPIO_TXRXCLK_GPIO_DEVICE_DESC    "adf702x"
 
 static struct gpio adf702x_gpios[] = {
@@ -190,51 +188,6 @@ static irqreturn_t r_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 
 
 /****************************************************************************/
-/* This function configures gpios and interrupts.                           */
-/****************************************************************************/
-int r_int_config(void) {
-
-  // request GPIOs
-  int ret = 0;
-
-  // Setting pin numbers coming from module params
-  adf702x_gpios[0].gpio = gpio_txrxclk_pin;
-  adf702x_gpios[1].gpio = gpio_txrxdata_pin;
-  adf702x_gpios[2].gpio = gpio_txrx_sw_pin;
-  adf702x_gpios[3].gpio = gpio_sle_pin;
-  adf702x_gpios[4].gpio = gpio_sdata_pin;
-  adf702x_gpios[5].gpio = gpio_sread_pin;
-  adf702x_gpios[6].gpio = gpio_sclk_pin;
-  adf702x_gpios[7].gpio = gpio_ce_pin;
-
-  if ( (ret = gpio_request_array(adf702x_gpios, ARRAY_SIZE(adf702x_gpios))) < 0 ) {
-    printk("GPIO failure requesting pin, errno=%d\n", ret);
-    return ret;
-  }
-
-  // set interrupt handler for TxRxCLK
-  if ( (irq_txrxclk_gpio = gpio_to_irq(gpio_txrxclk_pin)) < 0 ) {
-    printk("GPIO to IRQ mapping faiure %s\n", GPIO_TXRXCLK_GPIO_DESC);
-    return irq_txrxclk_gpio;
-  }
-
-  printk(KERN_NOTICE "Mapped int %d\n", irq_txrxclk_gpio);
-  if ( (ret = request_irq(irq_txrxclk_gpio,
-		  (irq_handler_t ) r_irq_handler,
-		  IRQF_TRIGGER_RISING, // | IRQF_TRIGGER_FALLING,
-		  GPIO_TXRXCLK_GPIO_DESC,
-			  GPIO_TXRXCLK_GPIO_DEVICE_DESC)) < 0 ) {
-    printk("Irq Request failure\n");
-    return ret;
-  }
-
-  init_waitqueue_head(&readers_wait_q);
-
-  return ret;
-}
-
-
-/****************************************************************************/
 /* This function releases interrupts.                                       */
 /****************************************************************************/
 void r_int_release(void) {
@@ -246,6 +199,61 @@ void r_int_release(void) {
 
 
 /****************************************************************************/
+/* This function configures gpios and interrupts.                           */
+/****************************************************************************/
+int r_int_config(void) {
+
+  int ret = 0;
+  int i = 0;
+
+  // Setting pin numbers coming from module params
+  adf702x_gpios[0].gpio = gpio_txrxclk_pin;
+  adf702x_gpios[1].gpio = gpio_txrxdata_pin;
+  adf702x_gpios[2].gpio = gpio_txrx_sw_pin;
+  adf702x_gpios[3].gpio = gpio_sle_pin;
+  adf702x_gpios[4].gpio = gpio_sdata_pin;
+  adf702x_gpios[5].gpio = gpio_sread_pin;
+  adf702x_gpios[6].gpio = gpio_sclk_pin;
+  adf702x_gpios[7].gpio = gpio_ce_pin;
+
+  // print pin descriptions and assignments
+  for (i = 0; i < ARRAY_SIZE(adf702x_gpios); i++) {
+    printk(KERN_INFO TAG "pin %s = %d", adf702x_gpios[i].label, adf702x_gpios[i].gpio);
+  }
+
+  // request GPIOs
+  if ( (ret = gpio_request_array(adf702x_gpios, ARRAY_SIZE(adf702x_gpios))) < 0 ) {
+    printk(KERN_ERR TAG "GPIO failure requesting pin, errno=%d\n", ret);
+    goto err;
+  }
+
+  // set interrupt handler for TxRxCLK
+  if ( (irq_txrxclk_gpio = gpio_to_irq(gpio_txrxclk_pin)) < 0 ) {
+    printk(KERN_ERR TAG "GPIO to IRQ mapping faiure %s\n", GPIO_TXRXCLK_GPIO_DESC);
+    ret = irq_txrxclk_gpio;
+    goto err;
+  }
+
+  printk(KERN_NOTICE TAG "mapped int %d\n", irq_txrxclk_gpio);
+  if ( (ret = request_irq(irq_txrxclk_gpio,
+		  (irq_handler_t ) r_irq_handler,
+		  IRQF_TRIGGER_RISING, // | IRQF_TRIGGER_FALLING,
+		  GPIO_TXRXCLK_GPIO_DESC,
+			  GPIO_TXRXCLK_GPIO_DEVICE_DESC)) < 0 ) {
+    printk(KERN_ERR TAG "irq Request failure\n");
+    goto err;
+  }
+
+  init_waitqueue_head(&readers_wait_q);
+
+  return ret;
+  
+ err:
+  r_int_release();
+  return ret;
+}
+
+/****************************************************************************/
 /* Module init / cleanup block.                                             */
 /****************************************************************************/
 static int __init r_init(void) {
@@ -253,17 +261,17 @@ static int __init r_init(void) {
   
   printk(KERN_NOTICE "Hello adf702x!\n");
   if ( (err = r_int_config()) < 0) {
-    printk(KERN_ERR "adf702x: unable to get usage of gpio pin");
+    printk(KERN_ERR TAG "unable to get usage of gpio pin");
     goto err;
   }
 
   if ( (major_number = register_chrdev(0, DEVICE_NAME, &fops)) < 0 ) {
-    printk(KERN_ERR "adf702x: unable to get major number");
+    printk(KERN_ERR TAG "unable to get major number");
     err = -EIO;
     goto err;
   }
 
-  printk(KERN_NOTICE "adf702x: got major_number=%d", major_number);
+  printk(KERN_NOTICE TAG "got major_number=%d", major_number);
   return 0;
   
  err:
@@ -271,7 +279,7 @@ static int __init r_init(void) {
 }
 
 void r_cleanup(void) {
-  printk(KERN_NOTICE "adf702x: goodbye\n");
+  printk(KERN_NOTICE TAG "goodbye\n");
 
   unregister_chrdev(major_number, DEVICE_NAME);
   r_int_release();
@@ -280,7 +288,7 @@ void r_cleanup(void) {
 static int adf702x_open(struct inode *inodep, struct file *filep) {
   // TODO implement file open.
   // use filep->private_data to hold status my view of the circular buffer
-  printk(KERN_NOTICE "adf702x: opened\n");
+  printk(KERN_NOTICE TAG "opened\n");
   return 0;
 }
 
@@ -313,7 +321,7 @@ static ssize_t adf702x_read(struct file *filep, char *buffer, size_t len, loff_t
   //printk(KERN_INFO "circ_buf before status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
   
   if ( ret != 0 ) {
-    printk(KERN_INFO "adf702x: failed to send %d characters to the user\n", nbytes);
+    printk(KERN_INFO TAG "failed to send %d characters to the user\n", nbytes);
     return -EFAULT;
   }
 
@@ -328,14 +336,14 @@ static ssize_t adf702x_write(struct file *filep, const char *buffer, size_t len,
   int i = 0;
   
   // TODO implement file write
-  printk(KERN_ALERT "adf702x: sorry write operation isn't supported yet");
+  printk(KERN_ALERT TAG "sorry write operation isn't supported yet");
 
   for ( i = 0; i < (len * 8); i++ ) {
     char bit_value = (buffer[i / 8] >> (i % 8)) & 0x1;
     push_bit_to_cbuf(state.rcv_buf, bit_value);
   }
 
-  printk(KERN_INFO "adf702x: wrote %d bytes", len);
+  printk(KERN_INFO TAG "wrote %d bytes", len);
   return len;
 }
 
@@ -346,7 +354,7 @@ static long adf702x_ioctl(struct file *filep, unsigned int cmd, unsigned long ar
   switch (cmd)
   {
     case ADF702X_IOC_COMMAND:
-      printk(KERN_INFO "adf702x: ioctl: command value: %08lx", arg & 0xFFFFFFFF);
+      printk(KERN_INFO TAG "ioctl: command value: %08lx", arg & 0xFFFFFFFF);
       // SLE down
       gpio_set_value(gpio_sle_pin, 0);
       for (i = 31; i>=0; i--) {
@@ -374,7 +382,7 @@ static long adf702x_ioctl(struct file *filep, unsigned int cmd, unsigned long ar
       return 0;
 
     case ADF702X_IOC_READBACK:
-      printk(KERN_INFO "adf702x: ioctl: readback value: %08lx", arg & 0x01FF);
+      printk(KERN_INFO TAG "ioctl: readback value: %08lx", arg & 0x01FF);
       ret_val = 0;
       // SLE down
       gpio_set_value(gpio_sle_pin, 0);
@@ -419,25 +427,25 @@ static long adf702x_ioctl(struct file *filep, unsigned int cmd, unsigned long ar
       udelay(T1_DELAY_US);	
       // SLE down
       gpio_set_value(gpio_sle_pin, 0);
-      printk(KERN_INFO "adf702x: ioctl: readback returns: %04x", ret_val & 0xFFFF);
+      printk(KERN_INFO TAG "ioctl: readback returns: %04x", ret_val & 0xFFFF);
       return ret_val & 0xFFFF;
       
     case ADF702X_IOC_ENABLE:
-      printk(KERN_INFO "adf702x: ioctl: enable");
+      printk(KERN_INFO TAG "ioctl: enable");
       gpio_set_value(gpio_ce_pin, 1);
       return 0;
  
     case ADF702X_IOC_DISABLE:
-      printk(KERN_INFO "adf702x: ioctl: disable");
+      printk(KERN_INFO TAG "ioctl: disable");
       gpio_set_value(gpio_ce_pin, 0);
       return 0;
 
     case ADF702X_IOC_TEST:
-      printk(KERN_INFO "adf702x: ioctl: test value: %ld", arg);
+      printk(KERN_INFO TAG "ioctl: test value: %ld", arg);
       return arg + 1;
 
     default:
-      printk(KERN_ERR "adf702x: unknown ioctl with %u", cmd);
+      printk(KERN_ERR TAG "unknown ioctl with %u", cmd);
       return -EINVAL;
   }
   
@@ -447,7 +455,7 @@ static long adf702x_ioctl(struct file *filep, unsigned int cmd, unsigned long ar
 static int adf702x_release(struct inode *inodep, struct file *filep) {
   // TODO implement file release
 
-  printk(KERN_INFO "adf702x: released");
+  printk(KERN_INFO TAG "released");
   return 0;
 }
 
