@@ -164,7 +164,9 @@ static irqreturn_t r_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
   int gpio_state = gpio_get_value(gpio_txrxdata_pin);
   push_bit_to_cbuf(state.rcv_buf, gpio_state);
 
-  wake_up_interruptible(&readers_wait_q);
+  if (state.rcv_buf->head % 8 == 0) {
+    wake_up_interruptible(&readers_wait_q);
+  }
   
   // disable hard interrupts (remember them in flag 'flags')
   //local_irq_save(flags);
@@ -314,10 +316,12 @@ static ssize_t adf702x_read(struct file *filep, char *buffer, size_t len, loff_t
   if ( cb->head > cb->tail ) {
     ret = copy_to_user(buffer, &cb->buf[cb->tail / 8], nbytes);
   } else if ( cb->head < cb->tail ) {
-    ret = copy_to_user(buffer, &cb->buf[cb->tail / 8], tail_bytes);
-    ret += copy_to_user(buffer + tail_bytes, &cb->buf[0], cb->head / 8);
+    ret = copy_to_user(buffer, &cb->buf[cb->tail / 8], min(nbytes, tail_bytes));
+    if (nbytes > tail_bytes) {
+      ret += copy_to_user(buffer + min(nbytes, tail_bytes), &cb->buf[0], nbytes - min(nbytes, tail_bytes));
+    }
   }
-  //printk(KERN_INFO "cbuf_size is %d, requested length is %d\n", cbuf_size(cb), len);
+  //printk(KERN_INFO "cbuf_size is %d, requested length is %d\n", cbufsize, len);
   //printk(KERN_INFO "circ_buf before status-> head=%d tail=%d size=%d\n", cb->head, cb->tail, cb->size);
   
   if ( ret != 0 ) {
